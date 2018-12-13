@@ -39,12 +39,27 @@ binary64 bias == 1023
 
 
 {- |  sampleUnitIntervalDoubleM uniformly samples over the [+0,1) interval  of
-  representable floating point numbers
+representable floating point numbers.
 
-  TODO: so for now the
+The underlying algorithm here is structured
+as sampling from the dyadic (binary) representation  of real numbers in the [0,1)
+interval, rounded to the nearest representable double precision floating point number.
+
+Note that this sampling strategy can be adapted to the interval [0,1] by sampling one more bit
+after this algorithm and rounding the sampled double up one ulp or leaving it unchanged, in
+accordance with a choice in rounding strategy for floating point numbers such as round ties to even.
+
+In such an extension,
+
+
+
+references:
+http://mumble.net/~campbell/2014/04/28/uniform-random-float
+and https://mumble.net/~campbell/2014/04/28/random_real.c
+additional references are linked from https://news.ycombinator.com/item?id=9207874
 -}
-sampleUnitIntervalDoubleM :: forall m . Monad m => (m Word64) -> m Double
-sampleUnitIntervalDoubleM mword = error "finish this" $ mword  {-computeMantissa
+sampleUnitIntervalDoubleM :: forall m . Monad m => m Word64 -> m Double
+sampleUnitIntervalDoubleM mword = computeMantissa
   where
     computeMantissa :: m Double
     computeMantissa = do
@@ -64,14 +79,21 @@ sampleUnitIntervalDoubleM mword = error "finish this" $ mword  {-computeMantissa
     --- and the normalized significand (which ellides the leading 1 digit)
     mkUnitDouble :: Word64 -> Word64 -> Double
     mkUnitDouble negUnBiasedExponent normalSignificand = toIEEE $ undefined (negUnBiasedExponent )
--}
 
-{- | sampleUnitIntervalDoubleReallySloppyM, using the same algorithm as in
+
+{- | sampleUnitIntervalDouble52BitM, using the same algorithm as in
 http://xoroshiro.di.unimi.it/#remarks, which is also used by the rand package
 in rust. It has issues, but its super fast. Generates all the representable floats
 the correspond to dyadic (binary) rationals of the form k/2^{−53}. Note that
-the lowest order bit will 0. Which is why the lowest order bit  of the random word
-is then xor'd against the corrected unit interval number in this specific
+the lowest order bit will be 0.
+
+Which is why (in the haskell implementation) the lowest order bit  of the random word
+is then xor'd against the corrected unit interval number in this specific implementation!
+(the lowest order bit is otherwise always 0).
+
+NB: some of the notes mention using floating point multiplication
+and division and imply that this strategy, rather than the bit fiddling one,
+will have full 53 bit rep. need to check this.
 
 
 extracted docs from the original site:
@@ -89,13 +111,18 @@ An alternative, faster multiplication-free operation is
        const union { uint64_t i; double d; } u = { .i = UINT64_C(0x3FF) << 52 | x >> 12 };
        return u.d - 1.0;
     }
-The code above cooks up by bit manipulation a real number in the interval [1..2), and then subtracts one to obtain a real number in the interval [0..1). If x is chosen uniformly among 64-bit integers, d is chosen uniformly among dyadic rationals of the form k / 2−52.
+The code above cooks up by bit manipulation a real number in the interval [1..2), and then subtracts one to obtain a real number in the interval [0..1). If x is chosen uniformly among 64-bit integers, d is chosen uniformly among dyadic rationals of the form k / 2^52.
 """
 
 
  -}
-sampleUnitIntervalDoubleReallySloppyM ::  forall m . Monad m => (m Word64) -> m Double
-sampleUnitIntervalDoubleReallySloppyM mword = do
+sampleUnitIntervalDouble52BitM ::  forall m . Monad m => (m Word64) -> m Double
+sampleUnitIntervalDouble52BitM mword = do
         word <- mword
-        return $ toIEEE $ (\x -> (  x `xor` (1 .&. word) )) $ fromIEEE $
-          toIEEE (0x3FF `unsafeShiftL` 52 .|. (word `unsafeShiftR` 12)) - 1
+        -- biasedfloat is the [1,2) float, which were we just to correct via (biasedfloat -1)
+        -- , will have zero as the last bit of the significand  always.
+        biasedfloat <- return $ toIEEE $ (0x3FF `unsafeShiftL` 52 .|. (word `unsafeShiftR` 12))
+        -- randomly setting the lowest order bit that would always otherwise be zero
+        -- in this calculation
+        return $ (toIEEE $ fromIEEE (biasedfloat - 1 ) `xor` (1 .&. word) )
+
